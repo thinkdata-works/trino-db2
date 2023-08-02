@@ -55,8 +55,8 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.bigintWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.charWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.dateColumnMappingUsingSqlDate;
-import static io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingSqlDate;
+import static io.trino.plugin.jdbc.StandardColumnMappings.dateColumnMappingUsingLocalDate;
+import static io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDate;
 import static io.trino.plugin.jdbc.StandardColumnMappings.decimalColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.defaultCharColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.defaultVarcharColumnMapping;
@@ -73,7 +73,6 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.smallintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.smallintWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.timeColumnMappingUsingSqlTime;
 import static io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunctionUsingSqlTimestamp;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.toLongTrinoTimestamp;
@@ -121,7 +120,7 @@ public class DB2Client
             RemoteQueryModifier remoteQueryModifier)
             throws SQLException
     {
-        super(config, "\"", connectionFactory, queryBuilder, identifierMapping, remoteQueryModifier);
+        super("\"", connectionFactory, queryBuilder, config.getJdbcTypesMappedToVarchar(), identifierMapping, remoteQueryModifier, true);
         this.varcharMaxLength = db2config.getVarcharMaxLength();
 
         // http://stackoverflow.com/questions/16910791/getting-error-code-4220-with-null-sql-state
@@ -208,7 +207,7 @@ public class DB2Client
                 return Optional.of(varbinaryColumnMapping());
 
             case Types.DATE:
-                return Optional.of(dateColumnMappingUsingSqlDate());
+                return Optional.of(dateColumnMappingUsingLocalDate());
 
             case Types.TIME:
                 // TODO Consider using `StandardColumnMappings.timeColumnMapping`
@@ -233,7 +232,7 @@ public class DB2Client
             return ColumnMapping.longMapping(
                     timestampType,
                     timestampReadFunction(timestampType),
-                    timestampWriteFunctionUsingSqlTimestamp(timestampType));
+                    timestampWriteFunction(timestampType));
         }
         checkArgument(timestampType.getPrecision() <= MAX_LOCAL_DATE_TIME_PRECISION, "Precision is out of range: %s", timestampType.getPrecision());
         return ColumnMapping.objectMapping(
@@ -364,7 +363,7 @@ public class DB2Client
             return WriteMapping.sliceMapping("varbinary", varbinaryWriteFunction());
         }
         if (type == DATE) {
-            WriteMapping.longMapping("date", dateWriteFunctionUsingSqlDate());
+            WriteMapping.longMapping("date", dateWriteFunctionUsingLocalDate());
         }
         throw new TrinoException(NOT_SUPPORTED, "Unsupported column type: " + type.getDisplayName());
     }

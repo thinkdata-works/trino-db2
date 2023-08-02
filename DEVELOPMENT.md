@@ -50,8 +50,13 @@ named `docker-compose.yml`:
     ```
 1. Make sure creating a connector config under `./conf/trino/catalog` to connect
 to an actual Db2 database. see details from [Connection Configuration](README.md#connection-configuration).
-1. Start this local trinodb server by running `docker-compose up -d`
-1. Connect to this local trinodb server via CLI to perform queries while
+2. Start this local trinodb server by running `docker-compose up -d`
+3. Connect to this local trinodb server via CLI to perform queries while
 capturing server output from container logs by running command `docker logs trino-coordinator`.
-1. If changing Java code, delete this local trinodb server by running command
+4. If changing Java code, delete this local trinodb server by running command
 `docker-compose down` then start from step 2.
+
+
+## Misc
+
+The style checker hates `*` imports, but it uses a ton of them. You may need to update your IDE settings to allow up to 100 imports 
