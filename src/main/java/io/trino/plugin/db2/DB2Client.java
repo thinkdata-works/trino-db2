@@ -51,8 +51,6 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.LocalDate;
-import java.time.ZoneId;
-import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 
@@ -312,8 +310,9 @@ public class DB2Client
 
     public static LongWriteFunction dateWriteFunctionUsingLocalDate()
     {
-        return LongWriteFunction.of(91, (statement, index, value) -> {
-            statement.setDate(index, (java.sql.Date) Date.from(LocalDate.ofEpochDay(value).atStartOfDay().atZone(ZoneId.systemDefault()).toInstant()));
+        return LongWriteFunction.of(91, (statement, index, value) ->
+        {
+            statement.setDate(index, java.sql.Date.valueOf(LocalDate.ofEpochDay(value)));
         });
     }
 
