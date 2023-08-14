@@ -40,6 +40,7 @@ import io.trino.spi.type.Decimals;
 import io.trino.spi.type.LongTimestamp;
 import io.trino.spi.type.TimeType;
 import io.trino.spi.type.TimestampType;
+import io.trino.spi.type.Timestamps;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.VarcharType;
 
@@ -103,6 +104,7 @@ import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
 import static java.lang.Math.max;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 
 public class DB2Client
@@ -314,6 +316,24 @@ public class DB2Client
         {
             statement.setDate(index, java.sql.Date.valueOf(LocalDate.ofEpochDay(value)));
         });
+    }
+
+    public static LongReadFunction timeReadFunction(TimeType timeType)
+    {
+        requireNonNull(timeType, "timeType is null");
+        checkArgument(timeType.getPrecision() <= 9, "Unsupported type precision: %s", timeType);
+        return (resultSet, columnIndex) -> {
+            java.sql.Time time = resultSet.getTime(columnIndex);
+            long nanosOfDay = time.toLocalTime().toNanoOfDay();
+            verify(nanosOfDay < 86400000000000L, "Invalid value of nanosOfDay: %s", nanosOfDay);
+            long picosOfDay = nanosOfDay * 1000L;
+            long rounded = Timestamps.round(picosOfDay, 12 - timeType.getPrecision());
+            if (rounded == 86400000000000000L) {
+                rounded = 0L;
+            }
+
+            return rounded;
+        };
     }
 
     /**
