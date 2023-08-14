@@ -49,11 +49,14 @@ import javax.inject.Inject;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
@@ -208,7 +211,7 @@ public class DB2Client
                 return Optional.of(dateColumnMappingUsingLocalDate());
             }
             case Types.TIME -> {
-                return Optional.of(StandardColumnMappings.timeColumnMapping(TimeType.TIME_MILLIS));
+                return Optional.of(timeColumnMapping(TimeType.TIME_MILLIS));
             }
             case Types.TIMESTAMP -> {
                 TimestampType timestampType = typeHandle.getDecimalDigits()
@@ -318,11 +321,17 @@ public class DB2Client
         });
     }
 
+    public static ColumnMapping timeColumnMapping(TimeType timeType)
+    {
+        return ColumnMapping.longMapping(timeType, timeReadFunction(timeType), timeWriteFunction(timeType.getPrecision()));
+    }
+
     public static LongReadFunction timeReadFunction(TimeType timeType)
     {
         requireNonNull(timeType, "timeType is null");
         checkArgument(timeType.getPrecision() <= 9, "Unsupported type precision: %s", timeType);
-        return (resultSet, columnIndex) -> {
+        return (resultSet, columnIndex) ->
+        {
             java.sql.Time time = resultSet.getTime(columnIndex);
             long nanosOfDay = time.toLocalTime().toNanoOfDay();
             verify(nanosOfDay < 86400000000000L, "Invalid value of nanosOfDay: %s", nanosOfDay);
@@ -334,6 +343,22 @@ public class DB2Client
 
             return rounded;
         };
+    }
+
+    public static LongWriteFunction timeWriteFunction(int precision)
+    {
+        checkArgument(precision <= 9, "Unsupported precision: %s", precision);
+        return LongWriteFunction.of(92, (statement, index, picosOfDay) ->
+        {
+            picosOfDay = Timestamps.round(picosOfDay, 12 - precision);
+            if (picosOfDay == 86400000000000000L) {
+                picosOfDay = 0L;
+            }
+            LocalTime localtime = StandardColumnMappings.fromTrinoTime(picosOfDay);
+            // Copied from private method in superclass
+            java.sql.Time sqltime = new Time(Time.valueOf(localtime).getTime() + TimeUnit.NANOSECONDS.toMillis(localtime.getNano()));
+            statement.setTime(index, sqltime);
+        });
     }
 
     /**
