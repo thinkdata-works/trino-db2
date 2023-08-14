@@ -17,13 +17,16 @@ import io.trino.plugin.jdbc.BaseJdbcClient;
 import io.trino.plugin.jdbc.BaseJdbcConfig;
 import io.trino.plugin.jdbc.ColumnMapping;
 import io.trino.plugin.jdbc.ConnectionFactory;
+import io.trino.plugin.jdbc.JdbcErrorCode;
 import io.trino.plugin.jdbc.JdbcSplit;
 import io.trino.plugin.jdbc.JdbcTableHandle;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
 import io.trino.plugin.jdbc.LongReadFunction;
+import io.trino.plugin.jdbc.LongWriteFunction;
 import io.trino.plugin.jdbc.ObjectReadFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
 import io.trino.plugin.jdbc.QueryBuilder;
+import io.trino.plugin.jdbc.StandardColumnMappings;
 import io.trino.plugin.jdbc.WriteMapping;
 import io.trino.plugin.jdbc.logging.RemoteQueryModifier;
 import io.trino.plugin.jdbc.mapping.IdentifierMapping;
@@ -31,21 +34,29 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.type.CharType;
+import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.Decimals;
 import io.trino.spi.type.LongTimestamp;
+import io.trino.spi.type.TimeType;
 import io.trino.spi.type.TimestampType;
+import io.trino.spi.type.Timestamps;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.VarcharType;
 
 import javax.inject.Inject;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
@@ -55,8 +66,6 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.bigintWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.charWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.dateColumnMappingUsingSqlDate;
-import static io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingSqlDate;
 import static io.trino.plugin.jdbc.StandardColumnMappings.decimalColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.defaultCharColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.defaultVarcharColumnMapping;
@@ -71,9 +80,7 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.realWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.shortDecimalWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.smallintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.smallintWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.timeColumnMappingUsingSqlTime;
 import static io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunctionUsingSqlTimestamp;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.toLongTrinoTimestamp;
@@ -100,6 +107,7 @@ import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
 import static java.lang.Math.max;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 
 public class DB2Client
@@ -154,71 +162,63 @@ public class DB2Client
         }
 
         switch (typeHandle.getJdbcType()) {
-            case Types.BIT:
-            case Types.BOOLEAN:
+            case Types.BIT, Types.BOOLEAN -> {
                 return Optional.of(booleanColumnMapping());
-
-            case Types.TINYINT:
+            }
+            case Types.TINYINT -> {
                 return Optional.of(tinyintColumnMapping());
-
-            case Types.SMALLINT:
+            }
+            case Types.SMALLINT -> {
                 return Optional.of(smallintColumnMapping());
-
-            case Types.INTEGER:
+            }
+            case Types.INTEGER -> {
                 return Optional.of(integerColumnMapping());
-
-            case Types.BIGINT:
+            }
+            case Types.BIGINT -> {
                 return Optional.of(bigintColumnMapping());
-
-            case Types.REAL:
+            }
+            case Types.REAL -> {
                 return Optional.of(realColumnMapping());
-
-            case Types.FLOAT:
-            case Types.DOUBLE:
+            }
+            case Types.FLOAT, Types.DOUBLE -> {
                 return Optional.of(doubleColumnMapping());
-
-            case Types.NUMERIC:
-            case Types.DECIMAL:
+            }
+            case Types.NUMERIC, Types.DECIMAL -> {
                 int decimalDigits = typeHandle.getRequiredDecimalDigits();
                 int precision = typeHandle.getRequiredColumnSize() + max(-decimalDigits, 0); // Map decimal(p, -s) (negative scale) to decimal(p+s, 0).
                 if (precision > Decimals.MAX_PRECISION) {
                     break;
                 }
                 return Optional.of(decimalColumnMapping(createDecimalType(precision, max(decimalDigits, 0))));
-
-            case Types.CHAR:
-            case Types.NCHAR:
+            }
+            case Types.CHAR, Types.NCHAR -> {
                 return Optional.of(defaultCharColumnMapping(typeHandle.getRequiredColumnSize(), false));
-
-            case Types.VARCHAR:
+            }
+            case Types.VARCHAR -> {
                 int columnSize = typeHandle.getRequiredColumnSize();
                 if (columnSize == -1) {
                     return Optional.of(varcharColumnMapping(createUnboundedVarcharType(), true));
                 }
                 return Optional.of(defaultVarcharColumnMapping(columnSize, true));
-
-            case Types.NVARCHAR:
-            case Types.LONGVARCHAR:
-            case Types.LONGNVARCHAR:
+            }
+            case Types.NVARCHAR, Types.LONGVARCHAR, Types.LONGNVARCHAR -> {
                 return Optional.of(defaultVarcharColumnMapping(typeHandle.getRequiredColumnSize(), false));
-
-            case Types.BINARY:
-            case Types.VARBINARY:
-            case Types.LONGVARBINARY:
+            }
+            case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> {
                 return Optional.of(varbinaryColumnMapping());
-
-            case Types.DATE:
-                return Optional.of(dateColumnMappingUsingSqlDate());
-
-            case Types.TIME:
-                // TODO Consider using `StandardColumnMappings.timeColumnMapping`
-                return Optional.of(timeColumnMappingUsingSqlTime());
-
-            case Types.TIMESTAMP:
+            }
+            case Types.DATE -> {
+                return Optional.of(dateColumnMappingUsingLocalDate());
+            }
+            case Types.TIME -> {
+                return Optional.of(timeColumnMapping(TimeType.TIME_MILLIS));
+            }
+            case Types.TIMESTAMP -> {
                 TimestampType timestampType = typeHandle.getDecimalDigits()
                         .map(TimestampType::createTimestampType)
                         .orElse(TIMESTAMP_MILLIS);
                 return Optional.of(timestampColumnMapping(timestampType));
+            }
         }
 
         if (getUnsupportedTypeHandling(session) == CONVERT_TO_VARCHAR) {
@@ -227,13 +227,18 @@ public class DB2Client
         return Optional.empty();
     }
 
+    public static ColumnMapping dateColumnMappingUsingLocalDate()
+    {
+        return ColumnMapping.longMapping(DateType.DATE, dateReadFunctionUsingLocalDate(), dateWriteFunctionUsingLocalDate());
+    }
+
     public static ColumnMapping timestampColumnMapping(TimestampType timestampType)
     {
         if (timestampType.getPrecision() <= TimestampType.MAX_SHORT_PRECISION) {
             return ColumnMapping.longMapping(
                     timestampType,
                     timestampReadFunction(timestampType),
-                    timestampWriteFunctionUsingSqlTimestamp(timestampType));
+                    timestampWriteFunction(timestampType));
         }
         checkArgument(timestampType.getPrecision() <= MAX_LOCAL_DATE_TIME_PRECISION, "Precision is out of range: %s", timestampType.getPrecision());
         return ColumnMapping.objectMapping(
@@ -279,14 +284,90 @@ public class DB2Client
                 (statement, index, value) -> statement.setTimestamp(index, Timestamp.valueOf(fromLongTrinoTimestamp(value, timestampType.getPrecision()))));
     }
 
+    /*
+        According to https://github.com/IBM/trino-db2/issues/75 the db2 jdbc connector's implement of `resultSet.getObject` can not be used with a class type as the second param
+        as it is implemented in the base class
+
+        This overrides to use the `setDate` and `getDate` objects
+     */
+    public static LongReadFunction dateReadFunctionUsingLocalDate()
+    {
+        return new LongReadFunction()
+        {
+            public boolean isNull(ResultSet resultSet, int columnIndex) throws SQLException
+            {
+                resultSet.getDate(columnIndex);
+                return resultSet.wasNull();
+            }
+
+            public long readLong(ResultSet resultSet, int columnIndex) throws SQLException
+            {
+                java.sql.Date value = resultSet.getDate(columnIndex);
+                if (value == null) {
+                    throw new TrinoException(JdbcErrorCode.JDBC_ERROR, "Driver returned null LocalDate for a non-null value");
+                }
+                else {
+                    return value.toLocalDate().toEpochDay();
+                }
+            }
+        };
+    }
+
+    public static LongWriteFunction dateWriteFunctionUsingLocalDate()
+    {
+        return LongWriteFunction.of(91, (statement, index, value) ->
+        {
+            statement.setDate(index, java.sql.Date.valueOf(LocalDate.ofEpochDay(value)));
+        });
+    }
+
+    public static ColumnMapping timeColumnMapping(TimeType timeType)
+    {
+        return ColumnMapping.longMapping(timeType, timeReadFunction(timeType), timeWriteFunction(timeType.getPrecision()));
+    }
+
+    public static LongReadFunction timeReadFunction(TimeType timeType)
+    {
+        requireNonNull(timeType, "timeType is null");
+        checkArgument(timeType.getPrecision() <= 9, "Unsupported type precision: %s", timeType);
+        return (resultSet, columnIndex) ->
+        {
+            java.sql.Time time = resultSet.getTime(columnIndex);
+            long nanosOfDay = time.toLocalTime().toNanoOfDay();
+            verify(nanosOfDay < 86400000000000L, "Invalid value of nanosOfDay: %s", nanosOfDay);
+            long picosOfDay = nanosOfDay * 1000L;
+            long rounded = Timestamps.round(picosOfDay, 12 - timeType.getPrecision());
+            if (rounded == 86400000000000000L) {
+                rounded = 0L;
+            }
+
+            return rounded;
+        };
+    }
+
+    public static LongWriteFunction timeWriteFunction(int precision)
+    {
+        checkArgument(precision <= 9, "Unsupported precision: %s", precision);
+        return LongWriteFunction.of(92, (statement, index, picosOfDay) ->
+        {
+            picosOfDay = Timestamps.round(picosOfDay, 12 - precision);
+            if (picosOfDay == 86400000000000000L) {
+                picosOfDay = 0L;
+            }
+            LocalTime localtime = StandardColumnMappings.fromTrinoTime(picosOfDay);
+            // Copied from private method in superclass
+            java.sql.Time sqltime = new Time(Time.valueOf(localtime).getTime() + TimeUnit.NANOSECONDS.toMillis(localtime.getNano()));
+            statement.setTime(index, sqltime);
+        });
+    }
+
     /**
      * To map data types when generating SQL.
      */
     @Override
     public WriteMapping toWriteMapping(ConnectorSession session, Type type)
     {
-        if (type instanceof VarcharType) {
-            VarcharType varcharType = (VarcharType) type;
+        if (type instanceof VarcharType varcharType) {
             String dataType;
 
             if (varcharType.isUnbounded()) {
@@ -305,8 +386,7 @@ public class DB2Client
             return WriteMapping.sliceMapping(dataType, varcharWriteFunction());
         }
 
-        if (type instanceof TimestampType) {
-            TimestampType timestampType = (TimestampType) type;
+        if (type instanceof TimestampType timestampType) {
             verify(timestampType.getPrecision() <= DB2_MAX_SUPPORTED_TIMESTAMP_PRECISION);
             return WriteMapping.longMapping(format("TIMESTAMP(%s)", timestampType.getPrecision()), timestampWriteFunction(timestampType));
         }
@@ -316,8 +396,7 @@ public class DB2Client
 
     protected WriteMapping legacyToWriteMapping(Type type)
     {
-        if (type instanceof VarcharType) {
-            VarcharType varcharType = (VarcharType) type;
+        if (type instanceof VarcharType varcharType) {
             String dataType;
             if (varcharType.isUnbounded()) {
                 dataType = "varchar";
@@ -330,8 +409,7 @@ public class DB2Client
         if (type instanceof CharType) {
             return WriteMapping.sliceMapping("char(" + ((CharType) type).getLength() + ")", charWriteFunction());
         }
-        if (type instanceof DecimalType) {
-            DecimalType decimalType = (DecimalType) type;
+        if (type instanceof DecimalType decimalType) {
             String dataType = format("decimal(%s, %s)", decimalType.getPrecision(), decimalType.getScale());
             if (decimalType.isShort()) {
                 return WriteMapping.longMapping(dataType, shortDecimalWriteFunction(decimalType));
@@ -364,7 +442,7 @@ public class DB2Client
             return WriteMapping.sliceMapping("varbinary", varbinaryWriteFunction());
         }
         if (type == DATE) {
-            WriteMapping.longMapping("date", dateWriteFunctionUsingSqlDate());
+            return WriteMapping.longMapping("date", dateWriteFunctionUsingLocalDate());
         }
         throw new TrinoException(NOT_SUPPORTED, "Unsupported column type: " + type.getDisplayName());
     }
