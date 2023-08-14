@@ -17,10 +17,12 @@ import io.trino.plugin.jdbc.BaseJdbcClient;
 import io.trino.plugin.jdbc.BaseJdbcConfig;
 import io.trino.plugin.jdbc.ColumnMapping;
 import io.trino.plugin.jdbc.ConnectionFactory;
+import io.trino.plugin.jdbc.JdbcErrorCode;
 import io.trino.plugin.jdbc.JdbcSplit;
 import io.trino.plugin.jdbc.JdbcTableHandle;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
 import io.trino.plugin.jdbc.LongReadFunction;
+import io.trino.plugin.jdbc.LongWriteFunction;
 import io.trino.plugin.jdbc.ObjectReadFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
 import io.trino.plugin.jdbc.QueryBuilder;
@@ -32,6 +34,7 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.type.CharType;
+import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.Decimals;
 import io.trino.spi.type.LongTimestamp;
@@ -43,9 +46,13 @@ import io.trino.spi.type.VarcharType;
 import javax.inject.Inject;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 
@@ -57,7 +64,6 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.bigintWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.charWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDate;
 import static io.trino.plugin.jdbc.StandardColumnMappings.decimalColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.defaultCharColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.defaultVarcharColumnMapping;
@@ -199,7 +205,7 @@ public class DB2Client
                 return Optional.of(varbinaryColumnMapping());
             }
             case Types.DATE -> {
-                return Optional.of(StandardColumnMappings.dateColumnMappingUsingLocalDate());
+                return Optional.of(dateColumnMappingUsingLocalDate());
             }
             case Types.TIME -> {
                 return Optional.of(StandardColumnMappings.timeColumnMapping(TimeType.TIME_MILLIS));
@@ -216,6 +222,11 @@ public class DB2Client
             return mapToUnboundedVarchar(typeHandle);
         }
         return Optional.empty();
+    }
+
+    public static ColumnMapping dateColumnMappingUsingLocalDate()
+    {
+        return ColumnMapping.longMapping(DateType.DATE, dateReadFunctionUsingLocalDate(), dateWriteFunctionUsingLocalDate());
     }
 
     public static ColumnMapping timestampColumnMapping(TimestampType timestampType)
@@ -268,6 +279,42 @@ public class DB2Client
         return ObjectWriteFunction.of(
                 LongTimestamp.class,
                 (statement, index, value) -> statement.setTimestamp(index, Timestamp.valueOf(fromLongTrinoTimestamp(value, timestampType.getPrecision()))));
+    }
+
+    /*
+        According to https://github.com/IBM/trino-db2/issues/75 the db2 jdbc connector's implement of `resultSet.getObject` can not be used with a class type as the second param
+        as it is implemented in the base class
+
+        This overrides to use the `setDate` and `getDate` objects
+     */
+    public static LongReadFunction dateReadFunctionUsingLocalDate()
+    {
+        return new LongReadFunction()
+        {
+            public boolean isNull(ResultSet resultSet, int columnIndex) throws SQLException
+            {
+                resultSet.getDate(columnIndex);
+                return resultSet.wasNull();
+            }
+
+            public long readLong(ResultSet resultSet, int columnIndex) throws SQLException
+            {
+                java.sql.Date value = resultSet.getDate(columnIndex);
+                if (value == null) {
+                    throw new TrinoException(JdbcErrorCode.JDBC_ERROR, "Driver returned null LocalDate for a non-null value");
+                }
+                else {
+                    return value.toLocalDate().toEpochDay();
+                }
+            }
+        };
+    }
+
+    public static LongWriteFunction dateWriteFunctionUsingLocalDate()
+    {
+        return LongWriteFunction.of(91, (statement, index, value) -> {
+            statement.setDate(index, (java.sql.Date) Date.from(LocalDate.ofEpochDay(value).atStartOfDay().atZone(ZoneId.systemDefault()).toInstant()));
+        });
     }
 
     /**
