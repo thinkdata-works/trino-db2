@@ -80,7 +80,6 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.realWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.shortDecimalWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.smallintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.smallintWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.toLongTrinoTimestamp;
@@ -392,6 +391,14 @@ public class DB2Client
         }
 
         return this.legacyToWriteMapping(type);
+    }
+
+    public static LongWriteFunction timestampWriteFunction(TimestampType timestampType)
+    {
+        checkArgument(timestampType.getPrecision() <= 6, "Precision is out of range: %s", timestampType.getPrecision());
+        return LongWriteFunction.of(93, (statement, index, value) -> {
+            statement.setTimestamp(index, Timestamp.valueOf(StandardColumnMappings.fromTrinoTimestamp(value)));
+        });
     }
 
     protected WriteMapping legacyToWriteMapping(Type type)
