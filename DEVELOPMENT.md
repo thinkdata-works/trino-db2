@@ -10,12 +10,13 @@
 ## Release
 First update the `main` branch of this repo via PR process. Then, go to https://github.com/IBM/trino-db2/releases to draft your release. Configure the release to create a new branch named after the Trino version (e.g. 372). Before publishing the release, build the plugin locally with `mvn clean install`, and upload the resulting archive `target/trino-db2-[version].zip` to the release binaries. Then, you may click "publish release".
 
-## Build a container image including this connector
+## Building the connector using docker:
 
-It uses multi-stage build and the trinodb container image from community as the
-base image.
+Build the plugin jars and copy them to the host machine:
 
-    docker build -t "<name>/<tag>" --build-arg BASE="trinodb/trino:<trino_verson_from_pom>" .
+```sh
+./build.sh
+```
 
 ## Testing
 
@@ -59,4 +60,4 @@ capturing server output from container logs by running command `docker logs trin
 
 ## Misc
 
-The style checker hates `*` imports, but it uses a ton of them. You may need to update your IDE settings to allow up to 100 imports 
+The style checker hates `*` imports, but it uses a ton of them. You may need to update your IDE settings to allow up to 100 imports
