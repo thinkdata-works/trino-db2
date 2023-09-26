@@ -44,7 +44,7 @@ import io.trino.spi.type.Timestamps;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.VarcharType;
 
-import javax.inject.Inject;
+import com.google.inject.Inject;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
